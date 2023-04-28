@@ -11,6 +11,7 @@ import math
 import scipy.stats
 from scipy.stats import ttest_ind
 import numpy as np
+import warnings
 
 # AUTHOR: ASHTI M. SHAH
 # MENTORS: DR. YORAM VODOVOTZ AND DR. RUBEN ZAMORA
@@ -100,7 +101,7 @@ class Form(QtWidgets.QDialog):
         #Signals and Functions
         self.fileButton.clicked.connect(lambda: self.getPath(self.fileLine))
         self.runButton.clicked.connect(lambda: self.DyHyp_Network_Complexity(dyhypStDevLine.value(), targetGroupName.text(),
-                                                                             targetGroupName.text(), outputTitle.text()) if dyHypNetwork.isChecked()
+                                                                             tissueColumn.text(), outputTitle.text()) if dyHypNetwork.isChecked()
                                                else self.runDyNAandDyHyp(dynaThreshLine.value(), dyhypStDevLine.value(),
                                                                          targetGroupName.text(), tissueColumn.text(), outputTitle.text()))
 
@@ -120,12 +121,13 @@ class Form(QtWidgets.QDialog):
         baselineName = self.baselineGroupName.text()
         raw_data = pandas.DataFrame()
         if(path.endswith('.xls') or path.endswith('.xlsx')):
-            raw_data = pandas.read_excel(path,sheetname=sheet)
+            raw_data = pandas.read_excel(path,sheet_name=sheet)
         if(path.endswith('.csv')):
             df = pandas.read_csv(path,engine='python',header=0,iterator=True,
                                  chunksize=15000,infer_datetime_format=True)
             raw_data = pandas.DataFrame(pandas.concat(df,ignore_index=True))
         # "Organize data by condition"
+        raw_data = raw_data.dropna(axis='columns',how='all')
         all_data_Baseline = raw_data.loc[raw_data[columnName] == baselineName]
         all_data = pandas.concat([all_data_Baseline, raw_data.loc[raw_data[columnName] == targetGroup]])
         return all_data
@@ -185,6 +187,7 @@ class Form(QtWidgets.QDialog):
         for c in cytokines:
             if inflammatory_mediator_rates[c][0] > 0:
                 pos_mediators.append(inflammatory_mediator_rates[c][0])
+        warnings.filterwarnings('ignore', category=RuntimeWarning, module='numpy')
         mean = np.mean(pos_mediators)
         stdev = np.std(pos_mediators)
         threshold = mean + stdev * num_std_dev
@@ -207,6 +210,7 @@ class Form(QtWidgets.QDialog):
         for c in cytokines:
             if inflammatory_mediator_rates[c][0] < 0:
                 neg_mediators.append(inflammatory_mediator_rates[c][0])
+        warnings.filterwarnings('ignore', category=RuntimeWarning, module='numpy')
         mean = np.mean(neg_mediators)
         stdev = np.std(neg_mediators)
         threshold = mean - stdev * num_std_dev
@@ -237,11 +241,12 @@ class Form(QtWidgets.QDialog):
         #"Nested loop in which we correlate x cytokine with all other cytokines"
         for x in cytokines:
             #"x: the cytokine that we are correlating all other cytokines with"
-            corr_data_x_current_mediator = pandas.DataFrame(time1_mediators[x].append(time2_mediators[x])).reset_index(
-                drop=True)
+            corr_data_x_current_mediator = pandas.concat([time1_mediators[x],time2_mediators[x]],ignore_index=True)
+            #corr_data_x_current_mediator = pandas.DataFrame(time1_mediators[x].append(time2_mediators[x])).reset_index(drop=True)
             correl_with_cur_mediator = pandas.DataFrame()
             for c in cytokines:
-                corr_data_y = pandas.DataFrame(time1_mediators[c].append(time2_mediators[c])).reset_index(drop=True)
+                #corr_data_y = pandas.DataFrame(time1_mediators[c].append(time2_mediators[c])).reset_index(drop=True)
+                corr_data_y = pandas.concat([time1_mediators[c],time2_mediators[c]],ignore_index=True)
                 correlation_data = pandas.concat([corr_data_x_current_mediator, corr_data_y], axis=1, ignore_index=True)
                 correlation_data.columns = [x, c]
                 #"to allow a DyNA edge to be drawn, both cytokine X and C must be significantly different than the baseline value"
@@ -393,7 +398,7 @@ class Form(QtWidgets.QDialog):
             return 0
         cur_condition_data = self.readFile(condition)
         #"Loop to run all functions"
-        all_times_str = ["t=0d", "t=7d"]
+        all_times_str = ["0d", "7d"]
         all_times_int = [0, 7]
         dyNA_network_complexity_all = {}
         table_rate_of_change = pandas.DataFrame()
@@ -449,7 +454,7 @@ class Form(QtWidgets.QDialog):
                 gs = fig_pos.add_gridspec(nrows=2, ncols=1, hspace=0.5, wspace=1.5)
                 self.visual_graph(fig_pos, gs, group_edges_dyHyp_pos, pos_sig_mediators_other_plasma,
                              pos_sig_mediators_with_other_cur_organ, "Plasma", list_organs[j])
-                title_pos = "{} || Positive Rate of Change: {} - {}".format(condition, cur_times_str[0], cur_times_str[1])
+                title_pos = "{} - Positive Rate of Change {} - {}".format(condition, cur_times_str[0], cur_times_str[1])
                 #fig_pos.suptitle(title_pos, size=40)
                 fig_pos.savefig(title_prefix+ " " + title_pos+ " " + list_organs[j] + ".png",
                                 bbox_inches="tight")
@@ -458,17 +463,19 @@ class Form(QtWidgets.QDialog):
                 gs = fig_neg.add_gridspec(nrows=2, ncols=1, hspace=0.5, wspace=1.5)
                 self.visual_graph(fig_neg, gs, group_edges_dyHyp_neg, neg_sig_mediators_other_plasma,
                              neg_sig_mediators_with_other_cur_organ, "Plasma", list_organs[j])
-                title_neg = "{} || Negative Rate of Change: {} - {}".format(condition, cur_times_str[0], cur_times_str[1])
+                title_neg = "{} - Negative Rate of Change {} - {}".format(condition, cur_times_str[0], cur_times_str[1])
                 #fig_neg.suptitle(title_neg, size=40)
                 fig_neg.savefig(title_prefix+ " " + title_neg + " " + list_organs[j] + ".png",
                                 bbox_inches="tight")
             dyNA_network_complexity_all["{} - {}".format(cur_times_str[0], cur_times_str[1])] = dict_dyNA_network_complexity
         dyNA_network_complexity_table = pandas.DataFrame(dyNA_network_complexity_all)
         writer = pandas.ExcelWriter('{} {} DyNA + Rate of Change.xlsx'.format(title_prefix, condition), engine='xlsxwriter')
-        dyNA_network_complexity_table.to_excel(writer,"{}_DyNA_Network_Complexity.xlsx".format(condition))
+        dyNA_network_complexity_table.to_excel(writer,"{}_DyNA_Complexity".format(condition))
         table_rate_of_change = table_rate_of_change.set_axis((['Plasma']+list_organs), axis='index')
         table_rate_of_change.to_excel("{}_Rate_of_Change.xlsx".format(condition))
-        writer.save()
+        writer.close()
+
+        self.close()
 
     def DyHyp_Network_Complexity(self, std_dev_dyHyp, condition, tissue_column, title_prefix):
         # Checks for necessary user variables. Returns 0 to let user input values and try again.
@@ -492,12 +499,14 @@ class Form(QtWidgets.QDialog):
                                                                                              std_dev_dyHyp)
             dict_neg_mediators[list_organs[j]] = self.get_significant_mediators_withTIME_negative(correl_with_time_cur_organ,
                                                                                              std_dev_dyHyp)
-        table_pos_mediators = pandas.DataFrame(dict([(k, pandas.Series(v)) for k, v in dict_pos_mediators.items()]))
-        table_neg_mediators = pandas.DataFrame(dict([(k, pandas.Series(v)) for k, v in dict_neg_mediators.items()]))
+        table_pos_mediators = pandas.DataFrame(dict([(k, pandas.Series(v)) for k, v in dict_pos_mediators.items()]),dtype=object)
+        table_neg_mediators = pandas.DataFrame(dict([(k, pandas.Series(v)) for k, v in dict_neg_mediators.items()]),dtype=object)
         writer =pandas.ExcelWriter('{} {} DyHyp Network Complexity.xlsx'.format(title_prefix,condition),engine='xlsxwriter')
         table_pos_mediators.to_excel(writer,"{}_PosMediators.xlsx".format(condition), engine='xlsxwriter', index=False)
         table_neg_mediators.to_excel(writer,"{}_NegMediators.xlsx".format(condition), engine='xlsxwriter', index=False)
-        writer.save()
+        writer.close()
+
+        self.close()
 
 form = Form()
 form.show()
