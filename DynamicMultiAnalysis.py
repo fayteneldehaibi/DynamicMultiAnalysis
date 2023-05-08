@@ -1,5 +1,7 @@
 import sys
 import os
+
+import graphviz
 import pandas
 from pandas import ExcelWriter
 import PyQt5
@@ -330,6 +332,28 @@ class Form(QtWidgets.QDialog):
         network_complexity = (sum_connections_TOTAL / 2) / 200
         return network_complexity
 
+    #Draws the mediator network within a single tissue
+    def draw_intratissue_network(self,title,sigMediators):
+        #tissue: str, name of tissue + Pos/Neg + time point
+        #sigMediators: dict of significantly correlated mediators within given tissue
+        #Need to remove symmetric edges, eg IL AIL B but no IL BIL A
+        if len(sigMediators) == 0:
+            return 0
+        mediators = list(sigMediators.keys())
+        network = graphviz.Digraph('network',strict=True)
+        network.attr(rank='same')
+        for m in mediators:
+            network.node(''.join(m.split(' ')))
+        allEdges = []
+        for k in sigMediators.keys():
+            if len(sigMediators[k]) > 0:
+                for val in sigMediators[k]:
+                    if ''.join((str(val)+str(k)).split(' ')) not in allEdges:
+                        network.edge(''.join(str(k).split(' ')),''.join(str(val).split(' ')),dir='both')
+                        allEdges.append(''.join((str(k)+str(val)).split(' ')))
+        result_ = network.render(title+'.png',cleanup=True,format='png',engine='dot').replace('\\', '/')
+        return 1
+
     # Function to create graph of DyHyp an DyNA
     def visual_graph(self,figure, grid_spec, grouped_edges_dyHyp, sigMediators_tissue1, sigMediators_tissue2, tissue_1_name,
                      tissue_2_name):
@@ -467,6 +491,19 @@ class Form(QtWidgets.QDialog):
                 #fig_neg.suptitle(title_neg, size=40)
                 fig_neg.savefig(title_prefix+ " " + title_neg + " " + list_organs[j] + ".png",
                                 bbox_inches="tight")
+                if j < 1:
+                    pos_network_plasma = self.draw_intratissue_network(
+                        '{} Plasma Pos Network {}-{}'.format(title_prefix,cur_times_str[0],cur_times_str[1]),
+                                                                       pos_sig_mediators_other_plasma)
+                    neg_network_plasma = self.draw_intratissue_network(
+                        '{} Plasma Neg Network {}-{}'.format(title_prefix,cur_times_str[0],cur_times_str[1]),
+                                                                       neg_sig_mediators_other_plasma)
+                pos_network_organ = self.draw_intratissue_network(
+                    '{} {} Pos Network {}-{}'.format(title_prefix, list_organs[j], cur_times_str[0], cur_times_str[1]),
+                    pos_sig_mediators_with_other_cur_organ)
+                neg_network_organ = self.draw_intratissue_network(
+                    '{} {} Neg Network {}-{}'.format(title_prefix, list_organs[j], cur_times_str[0], cur_times_str[1]),
+                    neg_sig_mediators_with_other_cur_organ)
             dyNA_network_complexity_all["{} - {}".format(cur_times_str[0], cur_times_str[1])] = dict_dyNA_network_complexity
         dyNA_network_complexity_table = pandas.DataFrame(dyNA_network_complexity_all)
         writer = pandas.ExcelWriter('{} {} DyNA + Rate of Change.xlsx'.format(title_prefix, condition), engine='xlsxwriter')
