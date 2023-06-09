@@ -8,11 +8,14 @@ import PyQt5
 from PyQt5 import QtCore, QtGui, QtWidgets
 import matplotlib
 from matplotlib import pyplot as plt
+from matplotlib.figure import Figure
+from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 import statistics
 import math
 import scipy.stats
 from scipy.stats import ttest_ind
 import numpy as np
+import hypernetx
 import warnings
 
 # AUTHOR: ASHTI M. SHAH
@@ -158,7 +161,7 @@ class Form(QtWidgets.QDialog):
         time_1 = tissue_rel_data.loc[tissue_rel_data[self.groupColumn.text()] == self.baselineGroupName.text()]
         time_2 = tissue_rel_data.loc[tissue_rel_data[self.groupColumn.text()] != self.baselineGroupName.text()]
         #"Get the data frames of just the inflammatory mediators for each time point"
-        time1_mediators = time_1.iloc[:, 4:]
+        time1_mediators = time_1.iloc[:, 4:] #change to detect first column with cyt data
         time2_mediators = time_2.iloc[:, 4:]
 
         cytokines = list(time1_mediators.columns.values)  # list of all cytokines
@@ -176,52 +179,39 @@ class Form(QtWidgets.QDialog):
             rate_of_change_table[c] = [rate_of_change]
         return (rate_of_change_table)
 
-    # Function to return a list of mediators that are positively correlated with time in a single organ
-    def get_significant_mediators_withTIME_positive(self,inflammatory_mediator_rates, num_std_dev):
-        # inflammatory_msediator_rates: correlation matrix (1x20) which has the pearson correlation of each inflammatory
+    # Function to return a list of mediators that are positively or negatively correlated with time in a single organ
+    def get_significant_mediators_withTIME(self,inflammatory_mediator_rates, num_std_dev):
+        # inflammatory_mediator_rates: correlation matrix (1x20) which has the pearson correlation of each inflammatory
         # mediator with itself over a dynamic time interval
         # num_std_dev: number of standard deviations above the mean rate of change at which a cytokine is considered
         # to be significantly increasing
 
         cytokines = list(inflammatory_mediator_rates.columns.values)  # list of all cytokines
         pos_mediators = []
+        neg_mediators = []
 
         for c in cytokines:
             if inflammatory_mediator_rates[c][0] > 0:
                 pos_mediators.append(inflammatory_mediator_rates[c][0])
-        warnings.filterwarnings('ignore', category=RuntimeWarning, module='numpy')
-        mean = np.mean(pos_mediators)
-        stdev = np.std(pos_mediators)
-        threshold = mean + stdev * num_std_dev
+            elif inflammatory_mediator_rates[c][0] < 0:
+                neg_mediators.append(inflammatory_mediator_rates[c][0])
+
+        warnings.filterwarnings('ignore', category=RuntimeWarning, module='numpy')#silences divide by zero warnings
+        meanPos = np.mean(pos_mediators)
+        stdevPos = np.std(pos_mediators)
+        thresholdPos = meanPos + stdevPos * num_std_dev
+        meanNeg = np.mean(neg_mediators)
+        stdevNeg = np.std(neg_mediators)
+        thresholdNeg = meanNeg - stdevNeg * num_std_dev
 
         significant_pos_mediators = []
-        for j in cytokines:
-            if inflammatory_mediator_rates[j][0] > threshold:
-                significant_pos_mediators.append(j)
-        return significant_pos_mediators
-
-    def get_significant_mediators_withTIME_negative(self,inflammatory_mediator_rates, num_std_dev):
-        # inflammatory_msediator_rates: correlation matrix (1x20) which has the pearson correlation of each inflammatory
-        # mediator with itself over a dynamic time interval
-        # num_std_dev: number of standard deviations below the mean rate of change at which a cytokine is considered
-        # to be significantly decreasing
-
-        cytokines = list(inflammatory_mediator_rates.columns.values)  # list of all cytokines
-        neg_mediators = []
-
-        for c in cytokines:
-            if inflammatory_mediator_rates[c][0] < 0:
-                neg_mediators.append(inflammatory_mediator_rates[c][0])
-        warnings.filterwarnings('ignore', category=RuntimeWarning, module='numpy')
-        mean = np.mean(neg_mediators)
-        stdev = np.std(neg_mediators)
-        threshold = mean - stdev * num_std_dev
-
         significant_neg_mediators = []
         for j in cytokines:
-            if inflammatory_mediator_rates[j][0] < threshold:
+            if inflammatory_mediator_rates[j][0] > thresholdPos:
+                significant_pos_mediators.append(j)
+            if inflammatory_mediator_rates[j][0] < thresholdNeg:
                 significant_neg_mediators.append(j)
-        return significant_neg_mediators
+        return significant_pos_mediators, significant_neg_mediators
 
     # Function to get the corelation every pair of inflammatory mediators in a single organ across two time points
     def get_correlation_matrix_withMEDIATORS_individual_tissue(self,tissue_rel_data, time_int):
@@ -265,43 +255,30 @@ class Form(QtWidgets.QDialog):
         corr_table_all_mediators.index = cytokines
         return (corr_table_all_mediators)
 
-    # Function return a dictionary of significant mediators that are positively correlated with each other
-    def get_significant_mediators_withEACHOTHER_positive(self,correl_matrix_with_mediators, threshold):
+    # Function return a dictionary of significant mediators that are positively or negatively correlated with each other
+    def get_significant_mediators_withEACHOTHER(self, correl_matrix_with_mediators, threshold):
         # correl_matrix_with_mediators: correlation matrix (27x27) which has the pearson correlation of each inflammatory
         # mediator with every other mediator over a dynamic time interval
         # threshold: minimum pearson correlation, type: float
         cytokines_column = list(correl_matrix_with_mediators.columns.values)
         cytokines_row = list(correl_matrix_with_mediators.index.values)  # list of all cytokines
-        significant_mediators = {}
+        significant_mediators_pos = {}
+        significant_mediators_neg = {}
         for x in cytokines_column:
-            significant_mediators_in_col = []
+            significant_mediators_in_col_p = []
+            significant_mediators_in_col_n = []
             for c in cytokines_row:
                 cur_correlation = correl_matrix_with_mediators.loc[c, x]
                 if math.isnan(cur_correlation) == False:
                     if cur_correlation >= threshold and x != c:
-                        significant_mediators_in_col.append(c)
-            if len(significant_mediators_in_col) > 0:
-                significant_mediators[x] = significant_mediators_in_col
-        return significant_mediators
-
-    # Function return a dictionary of significant mediators that are negatively correlated with each other
-    def get_significant_mediators_withEACHOTHER_negative(self,correl_matrix_with_mediators, threshold):
-        # correl_matrix_with_mediators: correlation matrix (27x27) which has the pearson correlation of each inflammatory
-        # mediator with every other mediator over a dynamic time interval
-        # threshold: minimum pearson correlation, type: float
-        cytokines_column = list(correl_matrix_with_mediators.columns.values)
-        cytokines_row = list(correl_matrix_with_mediators.index.values)  # list of all cytokines
-        significant_mediators = {}
-        for x in cytokines_column:
-            significant_mediators_in_col = []
-            for c in cytokines_row:
-                cur_correlation = correl_matrix_with_mediators.loc[c, x]
-                if math.isnan(cur_correlation) == False:
-                    if cur_correlation <= threshold * -1 and x != c:
-                        significant_mediators_in_col.append(c)
-            if len(significant_mediators_in_col) > 0:
-                significant_mediators[x] = significant_mediators_in_col
-        return significant_mediators
+                        significant_mediators_in_col_p.append(c)
+                    elif cur_correlation <= threshold * -1 and x != c:
+                        significant_mediators_in_col_n.append(c)
+            if len(significant_mediators_in_col_p) > 0:
+                significant_mediators_pos[x] = significant_mediators_in_col_p
+            if len(significant_mediators_in_col_n) > 0:
+                significant_mediators_neg[x] = significant_mediators_in_col_n
+        return significant_mediators_pos, significant_mediators_neg
 
     def group_edges_dyHyp(self,tissue_1, tissue_2, tissue_1_name, tissue_2_name):
         # Tissue_1: significant mediators within plasma
@@ -336,7 +313,6 @@ class Form(QtWidgets.QDialog):
     def draw_intratissue_network(self,title,sigMediators):
         #tissue: str, name of tissue + Pos/Neg + time point
         #sigMediators: dict of significantly correlated mediators within given tissue
-        #Need to remove symmetric edges, eg IL AIL B but no IL BIL A
         if len(sigMediators) == 0:
             return 0
         mediators = list(sigMediators.keys())
@@ -353,6 +329,18 @@ class Form(QtWidgets.QDialog):
                         allEdges.append(''.join((str(k)+str(val)).split(' ')))
         result_ = network.render(title+'.png',cleanup=True,format='png',engine='dot').replace('\\', '/')
         return 1
+
+    def draw_intertissue_network(self,subnets):
+        return 0
+        # make boxy hypergraph of tissues using matplotlib Polycollections....uh...that may take some doing
+        #ax = plt.subplot()
+        #read intratissue networks previously generated
+        #pic = plt.imread('<tissue>.png')
+        #embed subnets into proper spots
+        #offImage = OffsetImage(pic,zoom=0.45)#work on zoom later
+        #tissueBox = AnnotationBbox(offImage, (<coordinates>),xycoords='axes fraction', box_alignment=(1.1,-0.1)) #haha, get it? ... you get it?
+        #ax.addartist(tissue_Box)
+        #plt.savefig()
 
     # Function to create graph of DyHyp an DyNA
     def visual_graph(self,figure, grid_spec, grouped_edges_dyHyp, sigMediators_tissue1, sigMediators_tissue2, tissue_1_name,
@@ -422,62 +410,56 @@ class Form(QtWidgets.QDialog):
             return 0
         cur_condition_data = self.readFile(condition)
         #"Loop to run all functions"
-        all_times_str = ["0d", "7d"]
+        all_times_str = ['0d','7d']#sorted(list(set(cur_condition_data['Day'])))
         all_times_int = [0, 7]
         dyNA_network_complexity_all = {}
         table_rate_of_change = pandas.DataFrame()
+        # Trying to get groups of connected organs
+        #cur_cond_HG = hypernetx.Hypergraph.from_incidence_dataframe(cur_condition_data)
         # List of all tissues, does not include plasma
         list_organs = list(set(cur_condition_data[tissue_column]))
         list_organs.remove('Plasma')
         # Loop through time interval 0-7d
-        for n in range(0, 1):
+        for n in range(len(all_times_int)-1):
             cur_times_str = all_times_str[n:n + 2]
             cur_times_int = all_times_int[n:n + 2]
 
             # Get significant mediators with time and each other for plasma
             rel_data_plasma = cur_condition_data.loc[cur_condition_data[tissue_column] == "Plasma"]
-            correl_with_time_plasma = self.get_rate_of_change_inflammatory_mediator_and_TIME(rel_data_plasma, cur_times_int)
+            correl_with_time_plasma = self.get_rate_of_change_inflammatory_mediator_and_TIME(rel_data_plasma, cur_times_int).rename(index={0:'Plasma'})
             correl_with_other_mediators_plasma = self.get_correlation_matrix_withMEDIATORS_individual_tissue(rel_data_plasma,
-                                                                                                        cur_times_int)
-            pos_sig_mediators_time_plasma = self.get_significant_mediators_withTIME_positive(correl_with_time_plasma,
-                                                                                        std_dev_dyHyp)
-            neg_sig_mediators_time_plasma = self.get_significant_mediators_withTIME_negative(correl_with_time_plasma,
-                                                                                        std_dev_dyHyp)
-            pos_sig_mediators_other_plasma = self.get_significant_mediators_withEACHOTHER_positive(
+                                                                                                        cur_times_int).rename(index={0:'Plasma'})
+            pos_mediators_time_plasma, neg_mediators_time_plasma = self.get_significant_mediators_withTIME(
+                correl_with_time_plasma,std_dev_dyHyp)
+            pos_mediators_other_plasma, neg_mediators_other_plasma = self.get_significant_mediators_withEACHOTHER(
                 correl_with_other_mediators_plasma, threshold_dyNA)
-            neg_sig_mediators_other_plasma = self.get_significant_mediators_withEACHOTHER_negative(
-                correl_with_other_mediators_plasma, threshold_dyNA)
-            dyNA_network_complexity_plasma = self.get_dyNA_network_complexity(pos_sig_mediators_other_plasma,
-                                                                         neg_sig_mediators_other_plasma)
+            dyNA_network_complexity_plasma = self.get_dyNA_network_complexity(pos_mediators_other_plasma,
+                                                                         neg_mediators_other_plasma)
             dict_dyNA_network_complexity = {}
             dict_dyNA_network_complexity["Plasma"] = dyNA_network_complexity_plasma
             table_rate_of_change = pandas.concat([table_rate_of_change, correl_with_time_plasma])
             for j in range(0, len(list_organs)):
                 rel_data_cur_organ = cur_condition_data.loc[cur_condition_data[tissue_column] == list_organs[j]]
                 correl_with_time_cur_organ = self.get_rate_of_change_inflammatory_mediator_and_TIME(rel_data_cur_organ,
-                                                                                               cur_times_int)
+                                                                                               cur_times_int).rename(index={0:list_organs[j]})
                 correl_with_other_mediators_cur_organ = self.get_correlation_matrix_withMEDIATORS_individual_tissue(
-                    rel_data_cur_organ, cur_times_int)
-                pos_sig_mediators_with_time_cur_organ = self.get_significant_mediators_withTIME_positive(
+                    rel_data_cur_organ, cur_times_int).rename(index={0:list_organs[j]})
+                pos_mediators_with_time_cur_organ, neg_mediators_with_time_cur_organ = self.get_significant_mediators_withTIME(
                     correl_with_time_cur_organ, std_dev_dyHyp)
-                neg_sig_mediators_with_time_cur_organ = self.get_significant_mediators_withTIME_negative(
-                    correl_with_time_cur_organ, std_dev_dyHyp)
-                pos_sig_mediators_with_other_cur_organ = self.get_significant_mediators_withEACHOTHER_positive(
+                pos_mediators_with_other_cur_organ,neg_mediators_with_other_cur_organ = self.get_significant_mediators_withEACHOTHER(
                     correl_with_other_mediators_cur_organ, threshold_dyNA)
-                neg_sig_mediators_with_other_cur_organ = self.get_significant_mediators_withEACHOTHER_negative(
-                    correl_with_other_mediators_cur_organ, threshold_dyNA)
-                group_edges_dyHyp_pos = self.group_edges_dyHyp(pos_sig_mediators_time_plasma,
-                                                          pos_sig_mediators_with_time_cur_organ, "Plasma", list_organs[j])
-                group_edges_dyHyp_neg = self.group_edges_dyHyp(neg_sig_mediators_time_plasma,
-                                                          neg_sig_mediators_with_time_cur_organ, "Plasma", list_organs[j])
-                dyNA_network_complexity_cur_organ = self.get_dyNA_network_complexity(pos_sig_mediators_with_other_cur_organ,
-                                                                                neg_sig_mediators_with_other_cur_organ)
+                group_edges_dyHyp_pos = self.group_edges_dyHyp(pos_mediators_time_plasma,
+                                                          pos_mediators_with_time_cur_organ, "Plasma", list_organs[j])
+                group_edges_dyHyp_neg = self.group_edges_dyHyp(neg_mediators_time_plasma,
+                                                          neg_mediators_with_time_cur_organ, "Plasma", list_organs[j])
+                dyNA_network_complexity_cur_organ = self.get_dyNA_network_complexity(pos_mediators_with_other_cur_organ,
+                                                                                neg_mediators_with_other_cur_organ)
                 dict_dyNA_network_complexity[list_organs[j]] = dyNA_network_complexity_cur_organ
                 table_rate_of_change = pandas.concat([table_rate_of_change, correl_with_time_cur_organ])
                 fig_pos = plt.figure(figsize=(18, 18))
                 gs = fig_pos.add_gridspec(nrows=2, ncols=1, hspace=0.5, wspace=1.5)
-                self.visual_graph(fig_pos, gs, group_edges_dyHyp_pos, pos_sig_mediators_other_plasma,
-                             pos_sig_mediators_with_other_cur_organ, "Plasma", list_organs[j])
+                self.visual_graph(fig_pos, gs, group_edges_dyHyp_pos, pos_mediators_other_plasma,
+                             pos_mediators_with_other_cur_organ, "Plasma", list_organs[j])
                 title_pos = "{} - Positive Rate of Change {} - {}".format(condition, cur_times_str[0], cur_times_str[1])
                 #fig_pos.suptitle(title_pos, size=40)
                 fig_pos.savefig(title_prefix+ " " + title_pos+ " " + list_organs[j] + ".png",
@@ -485,8 +467,8 @@ class Form(QtWidgets.QDialog):
 
                 fig_neg = plt.figure(figsize=(18, 18))
                 gs = fig_neg.add_gridspec(nrows=2, ncols=1, hspace=0.5, wspace=1.5)
-                self.visual_graph(fig_neg, gs, group_edges_dyHyp_neg, neg_sig_mediators_other_plasma,
-                             neg_sig_mediators_with_other_cur_organ, "Plasma", list_organs[j])
+                self.visual_graph(fig_neg, gs, group_edges_dyHyp_neg, neg_mediators_other_plasma,
+                             neg_mediators_with_other_cur_organ, "Plasma", list_organs[j])
                 title_neg = "{} - Negative Rate of Change {} - {}".format(condition, cur_times_str[0], cur_times_str[1])
                 #fig_neg.suptitle(title_neg, size=40)
                 fig_neg.savefig(title_prefix+ " " + title_neg + " " + list_organs[j] + ".png",
@@ -494,16 +476,16 @@ class Form(QtWidgets.QDialog):
                 if j < 1:
                     pos_network_plasma = self.draw_intratissue_network(
                         '{} Plasma Pos Network {}-{}'.format(title_prefix,cur_times_str[0],cur_times_str[1]),
-                                                                       pos_sig_mediators_other_plasma)
+                                                                       pos_mediators_other_plasma)
                     neg_network_plasma = self.draw_intratissue_network(
                         '{} Plasma Neg Network {}-{}'.format(title_prefix,cur_times_str[0],cur_times_str[1]),
-                                                                       neg_sig_mediators_other_plasma)
+                                                                       neg_mediators_other_plasma)
                 pos_network_organ = self.draw_intratissue_network(
                     '{} {} Pos Network {}-{}'.format(title_prefix, list_organs[j], cur_times_str[0], cur_times_str[1]),
-                    pos_sig_mediators_with_other_cur_organ)
+                    pos_mediators_with_other_cur_organ)
                 neg_network_organ = self.draw_intratissue_network(
                     '{} {} Neg Network {}-{}'.format(title_prefix, list_organs[j], cur_times_str[0], cur_times_str[1]),
-                    neg_sig_mediators_with_other_cur_organ)
+                    neg_mediators_with_other_cur_organ)
             dyNA_network_complexity_all["{} - {}".format(cur_times_str[0], cur_times_str[1])] = dict_dyNA_network_complexity
         dyNA_network_complexity_table = pandas.DataFrame(dyNA_network_complexity_all)
         writer = pandas.ExcelWriter('{} {} DyNA + Rate of Change.xlsx'.format(title_prefix, condition), engine='xlsxwriter')
@@ -520,27 +502,30 @@ class Form(QtWidgets.QDialog):
             return 0
         cur_condition_data = self.readFile(condition)
         #"Loop to run all functions"
-        all_times_str = ["t=0d", "t=7d"]
+        all_times_str = ['0d','7d'] #sorted(list(set(cur_condition_data['Day'])))
         all_times_int = [0, 7]
         list_organs = list(set(cur_condition_data[tissue_column]))
         # Loop through time interval 0-7d
-        cur_times_str = all_times_str[0:2]
-        cur_times_int = all_times_int[0:2]
-        dict_pos_mediators = {}
-        dict_neg_mediators = {}
-        for j in range(len(list_organs)):
-            rel_data_cur_organ = cur_condition_data.loc[cur_condition_data[tissue_column] == list_organs[j]]
-            correl_with_time_cur_organ = self.get_rate_of_change_inflammatory_mediator_and_TIME(rel_data_cur_organ,
-                                                                                           cur_times_int)
-            dict_pos_mediators[list_organs[j]] = self.get_significant_mediators_withTIME_positive(correl_with_time_cur_organ,
-                                                                                             std_dev_dyHyp)
-            dict_neg_mediators[list_organs[j]] = self.get_significant_mediators_withTIME_negative(correl_with_time_cur_organ,
-                                                                                             std_dev_dyHyp)
-        table_pos_mediators = pandas.DataFrame(dict([(k, pandas.Series(v)) for k, v in dict_pos_mediators.items()]),dtype=object)
-        table_neg_mediators = pandas.DataFrame(dict([(k, pandas.Series(v)) for k, v in dict_neg_mediators.items()]),dtype=object)
-        writer =pandas.ExcelWriter('{} {} DyHyp Network Complexity.xlsx'.format(title_prefix,condition),engine='xlsxwriter')
-        table_pos_mediators.to_excel(writer,"{}_PosMediators.xlsx".format(condition), engine='xlsxwriter', index=False)
-        table_neg_mediators.to_excel(writer,"{}_NegMediators.xlsx".format(condition), engine='xlsxwriter', index=False)
+        writer = pandas.ExcelWriter('{} {} DyHyp Network Complexity.xlsx'.format(title_prefix, condition),
+                                    engine='xlsxwriter')
+        for n in range(len(all_times_strt)-1):
+            cur_times_str = all_times_str[n:n+2]
+            cur_times_int = all_times_int[n:n+2]
+            dict_pos_mediators = {}
+            dict_neg_mediators = {}
+            interval = cur_times_str[n] + '-' + cur_times_str[n+1]
+            for j in range(len(list_organs)):
+                rel_data_cur_organ = cur_condition_data.loc[cur_condition_data[tissue_column] == list_organs[j]]
+                correl_with_time_cur_organ = self.get_rate_of_change_inflammatory_mediator_and_TIME(rel_data_cur_organ,
+                                                                                               cur_times_int)
+                dict_pos_mediators[list_organs[j]],dict_neg_mediators[list_organs[j]] = self.get_significant_mediators_withTIME(
+                    correl_with_time_cur_organ,std_dev_dyHyp)
+            table_pos_mediators = pandas.DataFrame(dict([(k, pandas.Series(v)) for k, v in dict_pos_mediators.items()]),dtype=object)
+            table_neg_mediators = pandas.DataFrame(dict([(k, pandas.Series(v)) for k, v in dict_neg_mediators.items()]),dtype=object)
+            table_pos_mediators.to_excel(writer, "{}_{}_PosCyts.xlsx".format(condition,interval), engine='xlsxwriter',
+                                         index=False)
+            table_neg_mediators.to_excel(writer, "{}_{}_NegCyts.xlsx".format(condition,interval), engine='xlsxwriter',
+                                         index=False)
         writer.close()
 
         self.close()
