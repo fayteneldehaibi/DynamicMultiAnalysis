@@ -15,10 +15,11 @@ import math
 import scipy.stats
 from scipy.stats import ttest_ind
 import numpy as np
+import re
 import hypernetx
 import warnings
 
-# AUTHOR: ASHTI M. SHAH
+# AUTHORS: ASHTI M. SHAH, FAYTEN EL-DEHAIBI
 # MENTORS: DR. YORAM VODOVOTZ AND DR. RUBEN ZAMORA
 # DATE: January, 2023
 # GUI Added Apr 2023 by Fayten El-Dehaibi
@@ -40,6 +41,7 @@ class Form(QtWidgets.QDialog):
         self.groupColumn = QtWidgets.QLineEdit('Condition')
         self.baselineGroupName = QtWidgets.QLineEdit('Baseline')
         targetGroupName = QtWidgets.QLineEdit()
+        self.timeColumn = QtWidgets.QLineEdit('Time')
         tissueColumn = QtWidgets.QLineEdit('Compartment')
         dynaThreshLine = QtWidgets.QDoubleSpinBox()
         dynaThreshLine.setValue(0.90)
@@ -71,6 +73,9 @@ class Form(QtWidgets.QDialog):
         tissueLO = QtWidgets.QHBoxLayout()
         tissueLO.addWidget(QtWidgets.QLabel('Tissue Column Name:'))
         tissueLO.addWidget(tissueColumn)
+        timeLO = QtWidgets.QHBoxLayout()
+        timeLO.addWidget(QtWidgets.QLabel('Time Column Name:'))
+        timeLO.addWidget(self.timeColumn)
         threshLO = QtWidgets.QHBoxLayout()
         threshLO.addWidget(QtWidgets.QLabel('DyNA Threshold:'))
         threshLO.addWidget(dynaThreshLine)
@@ -93,6 +98,7 @@ class Form(QtWidgets.QDialog):
         layout.addLayout(baseLO)
         layout.addLayout(targetLO)
         layout.addLayout(tissueLO)
+        layout.addLayout(timeLO)
         layout.addWidget(QtWidgets.QLabel(''))
         layout.addWidget(QtWidgets.QLabel('Analysis Parameters'))
         layout.addLayout(threshLO)
@@ -142,6 +148,7 @@ class Form(QtWidgets.QDialog):
         if any([self.fileLine.text().isspace(),
                 self.groupColumn.text().isspace(),
                 self.baselineGroupName.text().isspace(),
+                self.timeColumn.text().isspace(),
                 condition.isspace(),
                 tissue_column.isspace()]):
             errMessage = QtWidgets.QMessageBox.warning(self,'Error: Blank fields detected',
@@ -151,18 +158,39 @@ class Form(QtWidgets.QDialog):
         else:
             return False
 
+    def sortTime(self,df):
+        baseList = list(set(df.loc[:,self.timeColumn.text()]))
+        numList = []
+        day_mod = re.compile(r'd',re.IGNORECASE)
+        hour_mod = re.compile(r'[hr]',re.IGNORECASE)
+        for b in baseList:
+            if 'd' in b:
+                numList.append(float(day_mod.sub('',b)))
+            elif 'h' in b:
+                numList.append(float(hour_mod.sub('',b))/24)
+        intList = sorted(numList)
+        strList = [str(s) + 'd' for s in intList]
+        return strList,intList
+
+    def findFirstCyt(self,df,tissue_col):
+        colFloatAll = list(df.select_dtypes(include='number').columns)
+        firstCytCol = [col for col in colFloatAll if col not in [self.groupColumn.text(),self.timeColumn.text(),tissue_col]][0]
+        return df.columns.get_loc(firstCytCol)
+
     # Function to get the correlation of each inflammatory mediator in a single organ
     # with TIME based on RATE OF CHANGE
-    def get_rate_of_change_inflammatory_mediator_and_TIME(self,tissue_rel_data, time_int):
+    def get_rate_of_change_inflammatory_mediator_and_TIME(self,tissue_rel_data, time_int,startCyt):
         # tissue_rel_data: rel_data_cur_organ; table of the relevant data from two time points from a single organ
         # time_int: int array of consective time points. ex [1, 3]
+        # startCyt: int loc of first column of mediators
 
         #"Get the data frames of data for each time point"
         time_1 = tissue_rel_data.loc[tissue_rel_data[self.groupColumn.text()] == self.baselineGroupName.text()]
         time_2 = tissue_rel_data.loc[tissue_rel_data[self.groupColumn.text()] != self.baselineGroupName.text()]
         #"Get the data frames of just the inflammatory mediators for each time point"
-        time1_mediators = time_1.iloc[:, 4:] #change to detect first column with cyt data
-        time2_mediators = time_2.iloc[:, 4:]
+
+        time1_mediators = time_1.iloc[:, startCyt:]
+        time2_mediators = time_2.iloc[:, startCyt:]
 
         cytokines = list(time1_mediators.columns.values)  # list of all cytokines
 
@@ -214,17 +242,18 @@ class Form(QtWidgets.QDialog):
         return significant_pos_mediators, significant_neg_mediators
 
     # Function to get the corelation every pair of inflammatory mediators in a single organ across two time points
-    def get_correlation_matrix_withMEDIATORS_individual_tissue(self,tissue_rel_data, time_int):
+    def get_correlation_matrix_withMEDIATORS_individual_tissue(self,tissue_rel_data, time_int,startCyt):
         # baseline_data: data at t0
         # tissue_rel_data: rel_data_cur_organ; table of the relevant data from two time points from a single organ
         # time_int: int array of consective time points. ex [1, 3]
+        # startCyt: int loc of first column of mediators
         #"Get the data frames of data for each time point"
         time_1 = tissue_rel_data.loc[tissue_rel_data[self.groupColumn.text()] == self.baselineGroupName.text()]
         time_2 = tissue_rel_data.loc[tissue_rel_data[self.groupColumn.text()] != self.baselineGroupName.text()]
 
         #"Get the data frames of just the inflammatory mediators for each time point"
-        time1_mediators = time_1.iloc[:, 4:]
-        time2_mediators = time_2.iloc[:, 4:]
+        time1_mediators = time_1.iloc[:, startCyt:]
+        time2_mediators = time_2.iloc[:, startCyt:]
 
         cytokines = list(time1_mediators.columns.values)  # list of all cytokines
 
@@ -409,9 +438,9 @@ class Form(QtWidgets.QDialog):
         if self.errorChecks(condition, tissue_column):
             return 0
         cur_condition_data = self.readFile(condition)
+        firstCytLoc = self.findFirstCyt(cur_condition_data,tissue_column)
         #"Loop to run all functions"
-        all_times_str = ['0d','7d']#sorted(list(set(cur_condition_data['Day'])))
-        all_times_int = [0, 7]
+        all_times_str,all_times_num = self.sortTime(cur_condition_data)
         dyNA_network_complexity_all = {}
         table_rate_of_change = pandas.DataFrame()
         # Trying to get groups of connected organs
@@ -420,15 +449,15 @@ class Form(QtWidgets.QDialog):
         list_organs = list(set(cur_condition_data[tissue_column]))
         list_organs.remove('Plasma')
         # Loop through time interval 0-7d
-        for n in range(len(all_times_int)-1):
+        for n in range(len(all_times_num)-1):
             cur_times_str = all_times_str[n:n + 2]
-            cur_times_int = all_times_int[n:n + 2]
-
+            cur_times_num = all_times_num[n:n + 2]
             # Get significant mediators with time and each other for plasma
             rel_data_plasma = cur_condition_data.loc[cur_condition_data[tissue_column] == "Plasma"]
-            correl_with_time_plasma = self.get_rate_of_change_inflammatory_mediator_and_TIME(rel_data_plasma, cur_times_int).rename(index={0:'Plasma'})
-            correl_with_other_mediators_plasma = self.get_correlation_matrix_withMEDIATORS_individual_tissue(rel_data_plasma,
-                                                                                                        cur_times_int).rename(index={0:'Plasma'})
+            correl_with_time_plasma = self.get_rate_of_change_inflammatory_mediator_and_TIME(
+                rel_data_plasma, cur_times_num,firstCytLoc).rename(index={0:'Plasma'})
+            correl_with_other_mediators_plasma = self.get_correlation_matrix_withMEDIATORS_individual_tissue(
+                rel_data_plasma,cur_times_num,firstCytLoc).rename(index={0:'Plasma'})
             pos_mediators_time_plasma, neg_mediators_time_plasma = self.get_significant_mediators_withTIME(
                 correl_with_time_plasma,std_dev_dyHyp)
             pos_mediators_other_plasma, neg_mediators_other_plasma = self.get_significant_mediators_withEACHOTHER(
@@ -440,10 +469,10 @@ class Form(QtWidgets.QDialog):
             table_rate_of_change = pandas.concat([table_rate_of_change, correl_with_time_plasma])
             for j in range(0, len(list_organs)):
                 rel_data_cur_organ = cur_condition_data.loc[cur_condition_data[tissue_column] == list_organs[j]]
-                correl_with_time_cur_organ = self.get_rate_of_change_inflammatory_mediator_and_TIME(rel_data_cur_organ,
-                                                                                               cur_times_int).rename(index={0:list_organs[j]})
+                correl_with_time_cur_organ = self.get_rate_of_change_inflammatory_mediator_and_TIME(
+                    rel_data_cur_organ,cur_times_num,firstCytLoc).rename(index={0:list_organs[j]})
                 correl_with_other_mediators_cur_organ = self.get_correlation_matrix_withMEDIATORS_individual_tissue(
-                    rel_data_cur_organ, cur_times_int).rename(index={0:list_organs[j]})
+                    rel_data_cur_organ, cur_times_num,firstCytLoc).rename(index={0:list_organs[j]})
                 pos_mediators_with_time_cur_organ, neg_mediators_with_time_cur_organ = self.get_significant_mediators_withTIME(
                     correl_with_time_cur_organ, std_dev_dyHyp)
                 pos_mediators_with_other_cur_organ,neg_mediators_with_other_cur_organ = self.get_significant_mediators_withEACHOTHER(
@@ -501,23 +530,23 @@ class Form(QtWidgets.QDialog):
         if self.errorChecks(condition, tissue_column):
             return 0
         cur_condition_data = self.readFile(condition)
+        firstCytLoc = self.findFirstCyt(cur_condition_data, tissue_column)
         #"Loop to run all functions"
-        all_times_str = ['0d','7d'] #sorted(list(set(cur_condition_data['Day'])))
-        all_times_int = [0, 7]
+        all_times_str,all_times_num = self.sortTime(cur_condition_data)
         list_organs = list(set(cur_condition_data[tissue_column]))
         # Loop through time interval 0-7d
         writer = pandas.ExcelWriter('{} {} DyHyp Network Complexity.xlsx'.format(title_prefix, condition),
                                     engine='xlsxwriter')
         for n in range(len(all_times_strt)-1):
             cur_times_str = all_times_str[n:n+2]
-            cur_times_int = all_times_int[n:n+2]
+            cur_times_num = all_times_num[n:n+2]
             dict_pos_mediators = {}
             dict_neg_mediators = {}
             interval = cur_times_str[n] + '-' + cur_times_str[n+1]
             for j in range(len(list_organs)):
                 rel_data_cur_organ = cur_condition_data.loc[cur_condition_data[tissue_column] == list_organs[j]]
                 correl_with_time_cur_organ = self.get_rate_of_change_inflammatory_mediator_and_TIME(rel_data_cur_organ,
-                                                                                               cur_times_int)
+                                                                                               cur_times_num,firstCytLoc)
                 dict_pos_mediators[list_organs[j]],dict_neg_mediators[list_organs[j]] = self.get_significant_mediators_withTIME(
                     correl_with_time_cur_organ,std_dev_dyHyp)
             table_pos_mediators = pandas.DataFrame(dict([(k, pandas.Series(v)) for k, v in dict_pos_mediators.items()]),dtype=object)
